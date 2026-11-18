@@ -1,0 +1,6 @@
+interface:
+  display_name: "Maintain upstream"
+  short_description: "Review the projects orstack borrows from and port what's worth taking"
+  default_prompt: "Use $maintain-upstream to review upstream changes since the last pins."
+policy:
+  allow_implicit_invocation: false

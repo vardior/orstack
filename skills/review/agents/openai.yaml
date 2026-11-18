@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review"
+  short_description: "Review code for actionable bugs, regressions, and verification gaps"
+  default_prompt: "Use $review to review this change in context and report actionable findings."
+policy:
+  allow_implicit_invocation: false

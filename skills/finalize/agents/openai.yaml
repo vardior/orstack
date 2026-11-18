@@ -1,0 +1,6 @@
+interface:
+  display_name: "Finalize"
+  short_description: "Finalize the branch end-to-end: verify, deslop, review, PR, CI"
+  default_prompt: "Use $finalize to drive this branch through verification, cleanup, review, and PR."
+policy:
+  allow_implicit_invocation: true

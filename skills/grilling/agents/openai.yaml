@@ -1,0 +1,6 @@
+interface:
+  display_name: "Grilling"
+  short_description: "Interview Or until every decision in a plan or brief is settled"
+  default_prompt: "Use $grilling to interview me about this plan or brief until every decision is settled."
+policy:
+  allow_implicit_invocation: false

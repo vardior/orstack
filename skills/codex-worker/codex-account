@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+personal_share_percent=0
+if (( RANDOM % 100 < personal_share_percent )); then
+  echo codex_personal
+else
+  echo codex
+fi

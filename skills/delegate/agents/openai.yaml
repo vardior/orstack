@@ -1,0 +1,6 @@
+interface:
+  display_name: "Delegate"
+  short_description: "Pick the model for a subagent and dispatch it safely"
+  default_prompt: "Use $delegate to choose the right model and brief for this delegated task."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,25 @@
+{
+	"name": "orstack",
+	"owner": {
+		"name": "Or Vardi"
+	},
+	"plugins": [
+		{
+			"name": "orstack",
+			"source": "./",
+			"description": "Or Vardi's skills for Claude Code and Codex: a task router with playbooks, model delegation, a pre-PR finalize gate and per-repo verification skills. Partly derived from Cursor's pstack (MIT).",
+			"author": {
+				"name": "Or Vardi"
+			},
+			"license": "MIT",
+			"skills": "./skills/",
+			"strict": false
+		},
+		{
+			"name": "clean-claude",
+			"source": "./mods/clean-claude",
+			"description": "Claude Code only. Keeps rarely needed heavy tools (Artifact ~11k tokens, the built-in browser ~8k, and a few rarely used ones) behind ToolSearch, and /context-audit itemizes what a session loads before you type."
+		}
+	],
+	"description": "Or Vardi's skills and Claude Code mods"
+}

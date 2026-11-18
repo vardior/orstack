@@ -1,0 +1,25 @@
+{
+  "cursor/plugins": {
+    "license": "MIT",
+    "reviewedThrough": "2f87c85",
+    "watch": ["pstack", "harness/pstack", "cursor-team-kit"],
+    "pristine": {
+      "pristine/pstack/poteto-mode-SKILL.md": {"from": "pstack/skills/poteto-mode/SKILL.md", "at": "68836dd"},
+      "pristine/pstack/playbooks/": {"from": "pstack/skills/poteto-mode/playbooks/", "at": "68836dd"},
+      "pristine/pstack/maintain-verification-skill-SKILL.md": {"from": "pstack/skills/maintain-verification-skill/SKILL.md", "at": "68836dd"},
+      "pristine/pstack/create-verification-skill/": {"from": "pstack/skills/create-verification-skill/", "at": "bc14437"},
+      "pristine/pstack/create-formal-verification-skill/SKILL.md": {"from": "pstack/skills/create-formal-verification-skill/SKILL.md", "at": "8b3326d"},
+      "pristine/cursor-team-kit/deslop-SKILL.md": {"from": "cursor-team-kit/skills/deslop/SKILL.md", "at": "fd87869"}
+    }
+  },
+  "mattpocock/skills": {
+    "license": "MIT",
+    "reviewedThrough": "5863806",
+    "watch": ["skills"]
+  },
+  "humanlayer/skills": {
+    "license": "MIT",
+    "reviewedThrough": "4e39d8f",
+    "watch": ["plugins/visual-pr"]
+  }
+}

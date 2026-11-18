@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex Worker"
+  short_description: "Delegate a scoped task to a headless Codex subprocess"
+  default_prompt: "Use $codex-worker to run this task in a headless Codex session."
+policy:
+  allow_implicit_invocation: true

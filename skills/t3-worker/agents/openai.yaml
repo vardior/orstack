@@ -1,0 +1,6 @@
+interface:
+  display_name: "T3 Worker"
+  short_description: "Delegate a Codex task as a T3 thread Or can watch and steer"
+  default_prompt: "Use $t3-worker to run this task as a Codex thread in T3."
+policy:
+  allow_implicit_invocation: true

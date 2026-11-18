@@ -1,0 +1,9 @@
+{
+  "name": "clean-claude",
+  "description": "Keeps rarely needed heavy tools (Artifact ~11k tokens, the built-in browser ~8k, and a few rarely used ones) behind ToolSearch, and /context-audit itemizes what a session loads before you type.",
+  "version": "1.2.0",
+  "author": {
+    "name": "Or Vardi"
+  },
+  "license": "MIT"
+}

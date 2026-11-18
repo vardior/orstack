@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+DRIVER_MODEL = "haiku"
+DRIVER_MCP_OUTPUT_TOKENS = "100000"
+ACCOUNT_INSTANCES = {"work": "codex", "personal": "codex_personal"}
+ACCOUNT_PICKER = Path.home() / ".claude/skills/codex-worker/codex-account"
+CODEX_CONFIG = Path.home() / ".codex/config.toml"
+LOG_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "t3-worker"
+
+FOLLOW_STEPS = """
+Then call t3_thread_wait with {"threadId": THREAD, "timeoutMs": 3600000}. While its result has timedOut true, call it again with the same arguments.
+Then call t3_thread_read with {"threadId": THREAD, "view": "messages", "limit": 5, "maxCharsPerItem": 20000}. While its result has hasMore true, call it again adding "afterPosition": <its nextPosition>. If the last assistant_message item you received has textTruncated true, call t3_thread_read with {"threadId": THREAD, "itemId": <that itemId>, "textOffset": <its nextTextOffset>, "maxCharsPerItem": 20000} until nextTextOffset is null.
+Finally reply with the single word DONE."""
+
+DRIVER_RULES = """You are a mechanical driver for the T3 Code MCP server. First load the tools with ToolSearch "select:TOOLS". Make only the calls described below, in order. If t3_project_list, t3_thread_wait or t3_thread_read fails with a connection error such as ECONNRESET, retry that call once. Never retry t3_thread_launch or t3_thread_send. If any call still errors, reply with its exact error text and stop. Do not summarize or relay any thread content."""
+
+
+def die(message, code=2):
+    print(f"t3-worker: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def git(cwd, *args):
+    result = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def codex_setting(key):
+    if not CODEX_CONFIG.exists():
+        return None
+    for line in CODEX_CONFIG.read_text().splitlines():
+        match = re.match(rf'^{key}\s*=\s*"([^"]*)"', line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def provider_instance(account):
+    if account:
+        return ACCOUNT_INSTANCES[account]
+    if ACCOUNT_PICKER.exists():
+        picked = subprocess.run([str(ACCOUNT_PICKER)], capture_output=True, text=True).stdout.strip()
+        if picked in ACCOUNT_INSTANCES.values():
+            return picked
+    return "codex"
+
+
+def workspace(cd):
+    top = git(cd, "rev-parse", "--show-toplevel")
+    if top is None:
+        die(f"not a git repository: {cd}")
+    common = Path(git(cd, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    root = common.parent if common.name == ".git" else common
+    if Path(top).resolve() == root.resolve():
+        return str(root), {"type": "root"}
+    branch = git(cd, "branch", "--show-current")
+    if not branch:
+        die(f"worktree has a detached HEAD; T3 binds a worktree by branch: {top}")
+    return str(root), {"type": "existing_worktree", "worktreePath": top, "branch": branch}
+
+
+def launch_driver_prompt(root, launch_args):
+    tools = "mcp__t3__t3_project_list,mcp__t3__t3_thread_launch,mcp__t3__t3_thread_wait,mcp__t3__t3_thread_read"
+    return (
+        DRIVER_RULES.replace("TOOLS", tools)
+        + f"""
+
+Call t3_project_list. Find the project whose workspaceRoot is exactly {root}. If none matches, reply NO_PROJECT and stop.
+Then call t3_thread_launch with the arguments object below, adding "projectId" set to that project's id. Copy every other field exactly, character for character, including the whole message.
+```json
+{json.dumps(launch_args, indent=2)}
+```
+In the steps below, THREAD is the threadId that t3_thread_launch returned."""
+        + FOLLOW_STEPS
+    )
+
+
+def resume_driver_prompt(thread_id, message):
+    tools = "mcp__t3__t3_thread_send,mcp__t3__t3_thread_wait,mcp__t3__t3_thread_read"
+    send_args = {"threadId": thread_id, "message": message, "mode": "auto"}
+    return (
+        DRIVER_RULES.replace("TOOLS", tools)
+        + f"""
+
+Call t3_thread_send with exactly this arguments object, copied character for character:
+```json
+{json.dumps(send_args, indent=2)}
+```"""
+        + FOLLOW_STEPS.replace("THREAD", json.dumps(thread_id))
+    )
+
+
+def tool_result_text(content):
+    if isinstance(content, str):
+        return content
+    return "".join(part.get("text", "") for part in content if isinstance(part, dict))
+
+
+def parse_json(text):
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def find_thread_id(payload):
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("threadId"), str):
+        return payload["threadId"]
+    for value in payload.values():
+        found = find_thread_id(value) if isinstance(value, dict) else None
+        if found:
+            return found
+    return None
+
+
+class Transcript:
+    def __init__(self, sent_message, expected_args):
+        self.sent_message = sent_message
+        self.expected_args = expected_args
+        self.tool_names = {}
+        self.tool_inputs = {}
+        self.thread_id = None
+        self.thread = None
+        self.items = {}
+        self.continuations = {}
+        self.errors = []
+        self.driver_reply = None
+        self.altered = False
+
+    def observe(self, event):
+        if event.get("type") == "assistant":
+            for block in event["message"].get("content", []):
+                if block.get("type") == "tool_use":
+                    self.tool_names[block["id"]] = block["name"]
+                    self.tool_inputs[block["id"]] = block.get("input", {})
+                    self.check_dispatch(block["name"], block.get("input", {}))
+        elif event.get("type") == "user":
+            for block in event["message"].get("content", []):
+                if block.get("type") == "tool_result":
+                    self.record_result(block)
+        elif event.get("type") == "result":
+            self.driver_reply = event.get("result")
+
+    def check_dispatch(self, name, arguments):
+        if not name.endswith(("t3_thread_launch", "t3_thread_send")):
+            return
+        if arguments.get("message") != self.sent_message:
+            self.altered = True
+        for key, value in self.expected_args.items():
+            if arguments.get(key) != value:
+                self.altered = True
+
+    def record_result(self, block):
+        name = self.tool_names.get(block.get("tool_use_id"), "")
+        continuation = "itemId" in self.tool_inputs.get(block.get("tool_use_id"), {})
+        text = tool_result_text(block.get("content", ""))
+        if block.get("is_error"):
+            self.errors.append(f"{name}: {text}")
+            return
+        payload = parse_json(text)
+        if name.endswith("t3_thread_launch") and self.thread_id is None:
+            self.thread_id = find_thread_id(payload)
+            if self.thread_id:
+                print(f"t3-worker: thread {self.thread_id} launched", file=sys.stderr)
+        if name.endswith("t3_thread_read") and isinstance(payload, dict):
+            self.thread = payload.get("thread", self.thread)
+            for item in payload.get("items", []):
+                if item.get("type") != "assistant_message":
+                    continue
+                if continuation and item["itemId"] in self.items:
+                    self.continuations.setdefault(item["itemId"], []).append(item.get("text", ""))
+                else:
+                    self.items[item["itemId"]] = item
+
+    def final_answer(self):
+        run_id = (self.thread or {}).get("latestRunId")
+        candidates = [item for item in self.items.values() if item.get("runId") == run_id]
+        if not candidates:
+            return None
+        last = max(candidates, key=lambda item: item["position"])
+        return last.get("text", "") + "".join(self.continuations.get(last["itemId"], []))
+
+    def run_status(self):
+        run_id = (self.thread or {}).get("latestRunId")
+        for run in (self.thread or {}).get("recentRuns", []):
+            if run.get("runId") == run_id:
+                return run.get("status")
+        return (self.thread or {}).get("status")
+
+
+def run_driver(prompt, cwd, transcript):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.jsonl"
+    print(f"t3-worker: driver log {log_path}", file=sys.stderr)
+    command = [
+        "claude", "-p", prompt,
+        "--model", DRIVER_MODEL,
+        "--allowedTools", "ToolSearch", "mcp__t3",
+        "--output-format", "stream-json", "--verbose",
+    ]
+    env = {**os.environ, "MAX_MCP_OUTPUT_TOKENS": DRIVER_MCP_OUTPUT_TOKENS}
+    with open(log_path, "w") as log, subprocess.Popen(
+        command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True
+    ) as driver:
+        for line in driver.stdout:
+            log.write(line)
+            event = parse_json(line)
+            if isinstance(event, dict):
+                transcript.observe(event)
+    return driver.returncode
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog="t3-worker",
+        usage="t3-worker [options] <prompt>\n       t3-worker [options] resume <thread-id> <prompt>",
+    )
+    parser.add_argument("-C", "--cd", default=os.getcwd())
+    parser.add_argument("--model")
+    parser.add_argument("--effort")
+    parser.add_argument("--account", choices=sorted(ACCOUNT_INSTANCES))
+    parser.add_argument("--title")
+    parser.add_argument("words", nargs="*")
+    args = parser.parse_args()
+    args.resume = None
+    if args.words[:1] == ["resume"]:
+        if len(args.words) < 2 or not args.words[1].strip():
+            die("resume requires a thread id")
+        args.resume, args.words = args.words[1], args.words[2:]
+    if args.words:
+        args.prompt = " ".join(args.words)
+    elif not sys.stdin.isatty():
+        args.prompt = sys.stdin.read()
+    else:
+        args.prompt = ""
+    if not args.prompt.strip():
+        die("a prompt argument or piped stdin is required")
+    return args
+
+
+def main():
+    args = parse_args()
+    cd = str(Path(args.cd).resolve())
+    if not Path(cd).is_dir():
+        die(f"working directory does not exist: {cd}")
+
+    if args.resume:
+        if args.model or args.effort or args.account or args.title:
+            die("resume keeps the thread's model, effort, account and title")
+        transcript = Transcript(args.prompt, {"threadId": args.resume})
+        transcript.thread_id = args.resume
+        prompt = resume_driver_prompt(args.resume, args.prompt)
+    else:
+        root, strategy = workspace(cd)
+        instance = provider_instance(args.account)
+        model = args.model or codex_setting("model")
+        if not model:
+            die(f"no --model given and no model in {CODEX_CONFIG}")
+        effort = args.effort or codex_setting("model_reasoning_effort") or "medium"
+        title = args.title or args.prompt.strip().splitlines()[0][:60]
+        model_selection = {
+            "provider": "codex",
+            "instanceId": instance,
+            "model": model,
+            "options": {"reasoningEffort": effort},
+        }
+        launch_args = {
+            "title": title,
+            "workspaceStrategy": strategy,
+            "modelSelection": model_selection,
+            "message": args.prompt,
+        }
+        print(f"t3-worker: {instance} {model} effort={effort} in {strategy.get('worktreePath', root)}", file=sys.stderr)
+        transcript = Transcript(args.prompt, {"workspaceStrategy": strategy, "modelSelection": model_selection})
+        prompt = launch_driver_prompt(root, launch_args)
+
+    driver_rc = run_driver(prompt, cd, transcript)
+
+    for error in transcript.errors:
+        print(f"t3-worker: {error}", file=sys.stderr)
+    if transcript.altered:
+        die(f"driver changed the dispatched arguments; inspect thread {transcript.thread_id} before trusting it", 1)
+    if transcript.thread_id is None:
+        die(f"no thread was launched; driver said: {transcript.driver_reply}", 1)
+
+    answer = transcript.final_answer()
+    status = transcript.run_status()
+    if answer is not None:
+        print(answer)
+    print(f"\n\nt3 thread: {transcript.thread_id}")
+    if status != "completed" or answer is None or driver_rc != 0:
+        die(f"run status {status}; driver exit {driver_rc}; driver said: {transcript.driver_reply}", 1)
+
+
+if __name__ == "__main__":
+    main()

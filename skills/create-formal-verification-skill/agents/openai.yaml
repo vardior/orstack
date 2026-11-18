@@ -1,0 +1,6 @@
+interface:
+  display_name: "Create Formal Verification Skill"
+  short_description: "Model-check or prove one dangerous promise and leave a rerunnable check"
+  default_prompt: "Use $create-formal-verification-skill to formally verify the riskiest promise in this repository."
+policy:
+  allow_implicit_invocation: false

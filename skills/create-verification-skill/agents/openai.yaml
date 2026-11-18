@@ -1,0 +1,6 @@
+interface:
+  display_name: "Create Verification Skill"
+  short_description: "Build a real user-path verification workflow"
+  default_prompt: "Use $create-verification-skill to add a live verification workflow to this repository."
+policy:
+  allow_implicit_invocation: false

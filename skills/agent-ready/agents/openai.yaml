@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Ready"
+  short_description: "Audit or build a feature area with the correction ladder and live proof"
+  default_prompt: "Use $agent-ready to make a feature area agent-ready or keep it agent-ready while building."
+policy:
+  allow_implicit_invocation: false

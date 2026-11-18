@@ -1,0 +1,6 @@
+interface:
+  display_name: "Deslop Sweep"
+  short_description: "Repo-wide deslop of an existing code area as automerge-safe PRs"
+  default_prompt: "Use $deslop-sweep to sweep a named code area for slop and dead code."
+policy:
+  allow_implicit_invocation: false
